@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper check
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // User profiles rules
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Products catalog is readable by anyone, admin can modify
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAuthenticated(); // Simulating administrative edits
+    }
+
+    // Wishlist alerts collection
+    match /wishlists/{wishlistId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Orders checkout details
+    match /orders/{orderId} {
+      allow create: if isAuthenticated();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
