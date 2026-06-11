@@ -26,9 +26,18 @@ class OtpScreen extends StatefulWidget {
 }
 
 class _OtpScreenState extends State<OtpScreen> {
-  final List<TextEditingController> _controllers = List.generate(6, (_) => TextEditingController());
-  final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
+  late final int _codeLength;
+  late final List<TextEditingController> _controllers;
+  late final List<FocusNode> _focusNodes;
   bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _codeLength = widget.isMfa ? 6 : 5;
+    _controllers = List.generate(_codeLength, (_) => TextEditingController());
+    _focusNodes = List.generate(_codeLength, (_) => FocusNode());
+  }
 
   @override
   void dispose() {
@@ -42,7 +51,7 @@ class _OtpScreenState extends State<OtpScreen> {
   }
 
   void _nextField(String value, int index) {
-    if (value.length == 1 && index < 5) {
+    if (value.length == 1 && index < _codeLength - 1) {
       _focusNodes[index + 1].requestFocus();
     }
     if (value.isEmpty && index > 0) {
@@ -51,7 +60,7 @@ class _OtpScreenState extends State<OtpScreen> {
 
     // Evaluate full code when filled
     final currentCode = _controllers.map((c) => c.text).join();
-    if (currentCode.length == 6) {
+    if (currentCode.length == _codeLength) {
       _verifyCode(currentCode);
     }
   }
@@ -67,7 +76,7 @@ class _OtpScreenState extends State<OtpScreen> {
       // Password reset OTP check
       success = await auth.verifyRecoveryOtp(code);
     } else {
-      // User registration verification
+      // Legacy User registration verification (fallback)
       success = await auth.verifyRegistrationAndCreateUser(
         email: widget.email,
         password: widget.password ?? '',
@@ -120,14 +129,14 @@ class _OtpScreenState extends State<OtpScreen> {
     final auth = Provider.of<AuthProvider>(context);
 
     String screenTitle = 'Verification Code';
-    String screenSubtitle = 'Enter the 6-digit code sent to your inbox';
+    String screenSubtitle = 'Enter the 5-digit code sent to your inbox';
 
     if (widget.isMfa) {
       screenTitle = '2FA Authentication';
       screenSubtitle = 'Enter the 6-digit code from Google Authenticator';
     } else if (widget.isRecovery) {
       screenTitle = 'Password Recovery';
-      screenSubtitle = 'Enter the 6-digit code sent to ${widget.email}';
+      screenSubtitle = 'Enter the 5-digit code sent to ${widget.email}';
     }
 
     return Scaffold(
@@ -185,7 +194,7 @@ class _OtpScreenState extends State<OtpScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: List.generate(
-                  6,
+                  _codeLength,
                   (index) => SizedBox(
                     width: 46,
                     height: 56,
@@ -193,6 +202,7 @@ class _OtpScreenState extends State<OtpScreen> {
                       controller: _controllers[index],
                       focusNode: _focusNodes[index],
                       keyboardType: TextInputType.number,
+                      autofillHints: null,
                       inputFormatters: [
                         FilteringTextInputFormatter.digitsOnly,
                         LengthLimitingTextInputFormatter(1),

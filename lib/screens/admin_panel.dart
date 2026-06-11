@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/shop_provider.dart';
 import '../services/auth_provider.dart';
 import '../models/product.dart';
+import '../models/order_model.dart';
 import 'home_screen.dart';
 import 'auth/login_screen.dart';
 
@@ -23,6 +24,7 @@ class _AdminPanelState extends State<AdminPanel> {
     _SidebarItem(icon: Icons.inventory_2_rounded, label: 'Products'),
     _SidebarItem(icon: Icons.receipt_long_rounded, label: 'Orders'),
     _SidebarItem(icon: Icons.people_rounded, label: 'Users'),
+    _SidebarItem(icon: Icons.support_agent_rounded, label: 'Support'),
   ];
 
   @override
@@ -36,6 +38,7 @@ class _AdminPanelState extends State<AdminPanel> {
       const _ProductsSection(),
       const _OrdersSection(),
       const _UsersSection(),
+      const _SupportSection(),
     ];
 
     return Scaffold(
@@ -333,7 +336,8 @@ class _DashboardSectionState extends State<_DashboardSection> {
       final usersSnap = await FirebaseFirestore.instance.collection('users').get();
       double revenue = 0;
       for (var doc in ordersSnap.docs) {
-        revenue += (doc.data()['total'] ?? 0.0) as double;
+        // Use (num).toDouble() — Firestore may store totals as int literals
+        revenue += (doc.data()['total'] as num? ?? 0).toDouble();
       }
       if (mounted) {
         setState(() {
@@ -343,7 +347,8 @@ class _DashboardSectionState extends State<_DashboardSection> {
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ADMIN DASHBOARD] Failed to load stats: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -368,7 +373,7 @@ class _DashboardSectionState extends State<_DashboardSection> {
             crossAxisCount: 4,
             mainAxisSpacing: 16,
             crossAxisSpacing: 16,
-            childAspectRatio: 1.6,
+            childAspectRatio: 2.2,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             children: [
@@ -478,25 +483,55 @@ class _DashboardSectionState extends State<_DashboardSection> {
   Widget _buildStatCard(ThemeData theme, String label, String value, IconData icon, Color color) {
     return Card(
       elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: color.withOpacity(0.2))),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: color.withOpacity(0.2)),
+      ),
       color: color.withOpacity(0.06),
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Container(
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: color, size: 20),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: color, size: 18),
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: theme.colorScheme.onSurface)),
-                Text(label, style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.5), fontWeight: FontWeight.w600)),
-              ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      value,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: theme.colorScheme.onSurface.withOpacity(0.5),
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -738,7 +773,9 @@ class _ProductsSection extends StatelessWidget {
                                                   try {
                                                     await FirebaseFirestore.instance.collection('products').doc(p.id).delete();
                                                     await shop.refreshProducts();
-                                                  } catch (_) {}
+                                                  } catch (e) {
+                                                    debugPrint('[ADMIN PRODUCTS] Delete failed: $e');
+                                                  }
                                                   if (ctx.mounted) Navigator.of(ctx).pop();
                                                 },
                                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
@@ -790,22 +827,220 @@ class _OrdersSectionState extends State<_OrdersSection> {
   }
 
   Future<void> _loadOrders() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
     try {
       final snap = await FirebaseFirestore.instance
           .collection('orders')
-          .orderBy('createdAt', descending: true)
           .get();
-      setState(() {
-        _orders = snap.docs.map((d) {
-          final data = d.data();
-          data['id'] = d.id;
-          return data;
-        }).toList();
-        _loading = false;
+      final docs = snap.docs.map((d) {
+        final data = d.data();
+        data['id'] = d.id;
+        return data;
+      }).toList();
+
+      // Sort by createdAt descending in Dart (avoids needing a Firestore index)
+      docs.sort((a, b) {
+        final aTs = a['createdAt'];
+        final bTs = b['createdAt'];
+        if (aTs == null && bTs == null) return 0;
+        if (aTs == null) return 1;
+        if (bTs == null) return -1;
+        final aDate = (aTs as Timestamp).toDate();
+        final bDate = (bTs as Timestamp).toDate();
+        return bDate.compareTo(aDate);
       });
-    } catch (_) {
-      setState(() => _loading = false);
+
+      if (mounted) {
+        setState(() {
+          _orders = docs;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[ADMIN ORDERS] Failed to load orders: $e');
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'Pending':
+        return Colors.orange;
+      case 'Processing':
+        return Colors.blue;
+      case 'Packed':
+        return Colors.indigo;
+      case 'Shipped':
+        return Colors.teal;
+      case 'Out For Delivery':
+        return Colors.deepPurple;
+      case 'Delivered':
+        return Colors.green;
+      case 'Cancelled':
+        return Colors.redAccent;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  void _showOrderManageDialog(BuildContext context, Map<String, dynamic> order) {
+    final theme = Theme.of(context);
+    final orderIdFull = order['id'] as String? ?? '';
+    final orderIdShort = orderIdFull.length > 8 ? orderIdFull.substring(0, 8).toUpperCase() : orderIdFull.toUpperCase();
+    
+    final rawHistory = order['statusHistory'] as List? ?? [];
+    String currentStatus = 'Pending';
+    if (rawHistory.isNotEmpty) {
+      currentStatus = rawHistory.last['status'] ?? 'Pending';
+    } else if (order['status'] != null) {
+      currentStatus = order['status'];
+    }
+
+    String selectedStatus = currentStatus;
+    final notesController = TextEditingController();
+    bool isSaving = false;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Manage Order #$orderIdShort'),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Customer: ${order['email'] ?? 'N/A'}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Text('Address: ${order['address'] ?? 'N/A'}'),
+                    const SizedBox(height: 16),
+                    const Text('Change Status:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: OrderModel.allStatuses.contains(selectedStatus) ? selectedStatus : 'Pending',
+                      items: OrderModel.allStatuses.map((s) {
+                        return DropdownMenuItem<String>(
+                          value: s,
+                          child: Text(s),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            selectedStatus = val;
+                          });
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Status Notes / Update Message:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: notesController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        hintText: 'e.g. Package has been dispatched via UPS.',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Status Timeline:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    ...rawHistory.map((h) {
+                      final timeVal = h['timestamp'];
+                      final dt = timeVal is Timestamp
+                          ? timeVal.toDate()
+                          : (timeVal is String ? DateTime.tryParse(timeVal) ?? DateTime.now() : DateTime.now());
+                      
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6.0),
+                        child: Text(
+                          '• [${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}] ${h['status']}: ${h['note'] ?? ''}',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving ? null : () async {
+                    setDialogState(() {
+                      isSaving = true;
+                    });
+                    
+                    try {
+                      final newEntry = {
+                        'status': selectedStatus,
+                        'timestamp': Timestamp.now(),
+                        'note': notesController.text.trim().isNotEmpty 
+                            ? notesController.text.trim()
+                            : 'Status updated by admin',
+                      };
+
+                      await FirebaseFirestore.instance.collection('orders').doc(orderIdFull).update({
+                        'statusHistory': FieldValue.arrayUnion([newEntry]),
+                      });
+
+                      final userId = order['userId'] as String? ?? '';
+                      if (userId.isNotEmpty) {
+                        final notifRef = FirebaseFirestore.instance
+                            .collection('users')
+                            .doc(userId)
+                            .collection('notifications')
+                            .doc();
+                        
+                        await notifRef.set({
+                          'id': notifRef.id,
+                          'title': 'Order Update: $selectedStatus',
+                          'body': 'Your order #$orderIdShort is now $selectedStatus. ${newEntry['note']}',
+                          'type': 'order',
+                          'read': false,
+                          'createdAt': FieldValue.serverTimestamp(),
+                        });
+                      }
+
+                      await _loadOrders();
+
+                      if (context.mounted) {
+                        Navigator.of(context).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Order #$orderIdShort status updated to $selectedStatus')),
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Error updating status: $e')),
+                        );
+                      }
+                    } finally {
+                      setDialogState(() {
+                        isSaving = false;
+                      });
+                    }
+                  },
+                  child: const Text('Save Changes'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -859,6 +1094,7 @@ class _OrdersSectionState extends State<_OrdersSection> {
                         Expanded(flex: 3, child: Text('Shipping Address', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
                         Expanded(child: Text('Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
                         Expanded(child: Text('Items', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                        Expanded(child: Text('Status', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
                       ],
                     ),
                   ),
@@ -871,35 +1107,64 @@ class _OrdersSectionState extends State<_OrdersSection> {
                         final orderId = (order['id'] as String? ?? '').substring(0, 8).toUpperCase();
                         final email = order['email'] as String? ?? 'N/A';
                         final address = order['address'] as String? ?? 'N/A';
-                        final total = (order['total'] ?? 0.0) as double;
+                        final total = (order['total'] as num? ?? 0).toDouble();
                         final items = order['items'] as List? ?? [];
+                        
+                        final rawHistory = order['statusHistory'] as List? ?? [];
+                        String currentStatus = 'Pending';
+                        if (rawHistory.isNotEmpty) {
+                          currentStatus = rawHistory.last['status'] ?? 'Pending';
+                        } else if (order['status'] != null) {
+                          currentStatus = order['status'];
+                        }
 
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                flex: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF00BFA5).withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(6),
+                        return InkWell(
+                          onTap: () => _showOrderManageDialog(context, order),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  flex: 2,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF00BFA5).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text('#$orderId', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF00BFA5))),
                                   ),
-                                  child: Text('#$orderId', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF00BFA5))),
                                 ),
-                              ),
-                              Expanded(flex: 2, child: Text(email, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
-                              Expanded(flex: 3, child: Text(address, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.6)), overflow: TextOverflow.ellipsis)),
-                              Expanded(
-                                child: Text('\$${total.toStringAsFixed(2)}',
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFFFF9EAA))),
-                              ),
-                              Expanded(
-                                child: Text('${items.length} item${items.length != 1 ? 's' : ''}',
-                                  style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.6))),
-                              ),
-                            ],
+                                Expanded(flex: 2, child: Text(email, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+                                Expanded(flex: 3, child: Text(address, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.6)), overflow: TextOverflow.ellipsis)),
+                                Expanded(
+                                  child: Text('\$${total.toStringAsFixed(2)}',
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFFFF9EAA))),
+                                ),
+                                Expanded(
+                                  child: Text('${items.length} item${items.length != 1 ? 's' : ''}',
+                                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.6))),
+                                ),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: _statusColor(currentStatus).withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      currentStatus,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: _statusColor(currentStatus),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },
@@ -947,8 +1212,9 @@ class _UsersSectionState extends State<_UsersSection> {
         }).toList();
         _loading = false;
       });
-    } catch (_) {
-      setState(() => _loading = false);
+    } catch (e) {
+      debugPrint('[ADMIN USERS] Failed to load users: $e');
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -957,7 +1223,9 @@ class _UsersSectionState extends State<_UsersSection> {
     try {
       await FirebaseFirestore.instance.collection('users').doc(uid).update({'role': newRole});
       _loadUsers();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ADMIN USERS] Failed to toggle role: $e');
+    }
   }
 
   @override
@@ -1079,6 +1347,368 @@ class _UsersSectionState extends State<_UsersSection> {
                                       ),
                               ),
                             ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPORT INBOX SECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SupportSection extends StatefulWidget {
+  const _SupportSection();
+
+  @override
+  State<_SupportSection> createState() => _SupportSectionState();
+}
+
+class _SupportSectionState extends State<_SupportSection> {
+  List<Map<String, dynamic>> _tickets = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTickets();
+  }
+
+  Future<void> _loadTickets() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('support_tickets')
+          .get();
+      final docs = snap.docs.map((d) {
+        final data = d.data();
+        data['id'] = d.id;
+        return data;
+      }).toList();
+
+      // Sort by createdAt descending in Dart
+      docs.sort((a, b) {
+        final aTs = a['createdAt'];
+        final bTs = b['createdAt'];
+        if (aTs == null && bTs == null) return 0;
+        if (aTs == null) return 1;
+        if (bTs == null) return -1;
+        final aDate = (aTs as Timestamp).toDate();
+        final bDate = (bTs as Timestamp).toDate();
+        return bDate.compareTo(aDate);
+      });
+
+      if (mounted) {
+        setState(() {
+          _tickets = docs;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[ADMIN SUPPORT] Failed to load tickets: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _showTicketDetailsDialog(BuildContext context, Map<String, dynamic> ticket) {
+    final ticketId = ticket['id'] as String;
+    final replies = ticket['replies'] as List? ?? [];
+    final replyController = TextEditingController();
+    bool isSaving = false;
+    String status = ticket['status'] ?? 'Open';
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Support Ticket: ${ticket['subject'] ?? 'Inquiry'}'),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              content: SizedBox(
+                width: 600,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'From: ${ticket['name'] ?? 'N/A'} (${ticket['email'] ?? 'N/A'})',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: (status == 'Open' ? Colors.green : Colors.grey).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              status,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: status == 'Open' ? Colors.green : Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      const Text('Message:', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      Text(ticket['message'] ?? '', style: const TextStyle(height: 1.4, fontSize: 13)),
+                      const Divider(height: 32),
+                      const Text('Replies History:', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      if (replies.isEmpty)
+                        const Text('No replies sent yet.', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey, fontSize: 12))
+                      else
+                        ...replies.map((r) {
+                          final sender = r['sender'] ?? 'Admin';
+                          final text = r['message'] ?? '';
+                          final timeVal = r['timestamp'];
+                          final dt = timeVal is Timestamp
+                              ? timeVal.toDate()
+                              : (timeVal is String ? DateTime.tryParse(timeVal) ?? DateTime.now() : DateTime.now());
+                          
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            color: sender == 'Admin' ? const Color(0xFF6C63FF).withOpacity(0.05) : Colors.grey.shade100,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(sender, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                      Text(
+                                        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}',
+                                        style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(text, style: const TextStyle(fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      if (status == 'Open') ...[
+                        const Divider(height: 32),
+                        const Text('Send a Reply:', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: replyController,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            hintText: 'Type your reply message here...',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
+                if (status == 'Open') ...[
+                  ElevatedButton(
+                    onPressed: () async {
+                      try {
+                        await FirebaseFirestore.instance.collection('support_tickets').doc(ticketId).update({
+                          'status': 'Closed',
+                        });
+                        setDialogState(() {
+                          status = 'Closed';
+                        });
+                        await _loadTickets();
+                      } catch (_) {}
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey, foregroundColor: Colors.white),
+                    child: const Text('Close Ticket'),
+                  ),
+                  ElevatedButton(
+                    onPressed: isSaving ? null : () async {
+                      final text = replyController.text.trim();
+                      if (text.isEmpty) return;
+
+                      setDialogState(() {
+                        isSaving = true;
+                      });
+
+                      try {
+                        final newReply = {
+                          'sender': 'Admin',
+                          'message': text,
+                          'timestamp': Timestamp.now(),
+                        };
+
+                        await FirebaseFirestore.instance.collection('support_tickets').doc(ticketId).update({
+                          'replies': FieldValue.arrayUnion([newReply]),
+                        });
+
+                        final customerUid = ticket['userId'] as String? ?? '';
+                        if (customerUid.isNotEmpty) {
+                          final notifRef = FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(customerUid)
+                              .collection('notifications')
+                              .doc();
+                          
+                          await notifRef.set({
+                            'id': notifRef.id,
+                            'title': 'New Support Ticket Reply',
+                            'body': 'Admin replied to your inquiry "${ticket['subject']}": $text',
+                            'type': 'support',
+                            'read': false,
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+                        }
+
+                        await _loadTickets();
+
+                        if (context.mounted) {
+                          Navigator.of(context).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Support ticket reply sent successfully')),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Failed to reply: $e')),
+                          );
+                        }
+                      } finally {
+                        setDialogState(() {
+                          isSaving = false;
+                        });
+                      }
+                    },
+                    child: const Text('Send Reply'),
+                  ),
+                ],
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    if (_loading) return const Center(child: CircularProgressIndicator());
+
+    if (_tickets.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.support_agent_rounded, size: 64, color: theme.colorScheme.onSurface.withOpacity(0.2)),
+            const SizedBox(height: 16),
+            Text('No support tickets found', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.4), fontSize: 16)),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('${_tickets.length} total tickets', style: TextStyle(fontSize: 13, color: theme.colorScheme.onSurface.withOpacity(0.5))),
+              const Spacer(),
+              IconButton(onPressed: _loadTickets, icon: const Icon(Icons.refresh_rounded), tooltip: 'Refresh'),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: theme.colorScheme.outlineVariant.withOpacity(0.5))),
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Expanded(flex: 2, child: Text('Customer Name', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                        Expanded(flex: 2, child: Text('Email Address', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                        Expanded(flex: 3, child: Text('Subject', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                        Expanded(child: Text('Status', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: _tickets.length,
+                      separatorBuilder: (_, __) => Divider(height: 1, color: theme.colorScheme.outlineVariant.withOpacity(0.3)),
+                      itemBuilder: (context, index) {
+                        final ticket = _tickets[index];
+                        final name = ticket['name'] ?? 'N/A';
+                        final email = ticket['email'] ?? 'N/A';
+                        final subject = ticket['subject'] ?? 'N/A';
+                        final status = ticket['status'] ?? 'Open';
+
+                        return InkWell(
+                          onTap: () => _showTicketDetailsDialog(context, ticket),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            child: Row(
+                              children: [
+                                Expanded(flex: 2, child: Text(name, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                Expanded(flex: 2, child: Text(email, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+                                Expanded(flex: 3, child: Text(subject, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.6)), overflow: TextOverflow.ellipsis)),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: (status == 'Open' ? Colors.green : Colors.grey).withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      status,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: status == 'Open' ? Colors.green : Colors.grey,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },

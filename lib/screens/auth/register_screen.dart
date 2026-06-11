@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_provider.dart';
+import '../home_screen.dart';
+import '../admin_panel.dart';
 import 'otp_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -22,28 +24,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final email = _emailController.text.trim();
-    
-    // Initiate Zoho SMTP 2-step OTP verification code
+    final name = _nameController.text.trim();
+    final password = _passwordController.text;
+
     await auth.initiateRegistrationOtp(email);
 
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Verification code sent to your email.'),
+        content: Text('OTP code sent to your email.'),
         backgroundColor: Colors.blue,
       ),
     );
-
-    // Route to OtpScreen passing credentials to complete registration after verification
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => OtpScreen(
           isMfa: false,
           isRecovery: false,
           email: email,
-          password: _passwordController.text,
-          name: _nameController.text.trim(),
+          password: password,
+          name: name,
         ),
       ),
     );
@@ -132,6 +133,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         prefixIcon: Icon(Icons.email_outlined),
                       ),
                     ),
+
                     const SizedBox(height: 16),
                     TextFormField(
                       controller: _passwordController,
@@ -166,7 +168,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         height: 24,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       )
-                    : const Text('Send Verification Code'),
+                    : const Text('Create Account'),
               ),
               const SizedBox(height: 32),
               Row(

@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/user.dart';
 
 class AuthProvider extends ChangeNotifier {
@@ -13,37 +15,93 @@ class AuthProvider extends ChangeNotifier {
   String? _otpCode; // Email registration/recovery OTP
   String? _pendingEmail; // Email awaiting validation
   String? _pendingPassword; // Password awaiting TOTP validation
+  String? _verificationId; // Phone Auth verification ID
 
   UserProfile? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _currentUser != null;
 
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
+
   AuthProvider() {
-    _loadSession();
+    _initAuthListener();
   }
 
-  Future<void> _loadSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final uid = prefs.getString('auth_uid');
-    final email = prefs.getString('auth_email');
-    final displayName = prefs.getString('auth_display_name') ?? 'Parent';
-    final avatar = prefs.getInt('auth_avatar') ?? 0;
-    final totpEnabled = prefs.getBool('auth_totp_enabled') ?? false;
-    final totpSecret = prefs.getString('auth_totp_secret');
-    final role = prefs.getString('auth_role') ?? 'user';
+  void _initAuthListener() {
+    FirebaseAuth.instance.authStateChanges().listen((User? user) async {
+      if (user == null) {
+        _currentUser = null;
+        _isInitialized = true;
+        notifyListeners();
+        // Clear prefs
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('auth_uid');
+          await prefs.remove('auth_email');
+          await prefs.remove('auth_display_name');
+          await prefs.remove('auth_avatar');
+          await prefs.remove('auth_role');
+          await prefs.remove('auth_totp_enabled');
+          await prefs.remove('auth_totp_secret');
+        } catch (e) {
+          debugPrint('[AUTH PROVIDER ERROR] Failed to clear SharedPreferences: $e');
+        }
+      } else {
+        try {
+          // Fetch user doc from Firestore
+          final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+          final data = doc.data();
+          final role = data?['role'] ?? (user.email?.toLowerCase().contains('admin') == true ? 'admin' : 'user');
+          final displayName = data?['displayName'] ?? user.displayName ?? user.email?.split('@')[0] ?? 'Parent';
+          final avatarIndex = data?['avatarIndex'] ?? 0;
+          final isTotpEnabled = data?['isTotpEnabled'] ?? false;
+          final totpSecret = data?['totpSecret'];
 
-    if (uid != null && email != null) {
-      _currentUser = UserProfile(
-        uid: uid,
-        email: email,
-        displayName: displayName,
-        avatarIndex: avatar,
-        isTotpEnabled: totpEnabled,
-        totpSecret: totpSecret,
-        role: role,
-      );
+          _currentUser = UserProfile(
+            uid: user.uid,
+            email: user.email ?? '',
+            displayName: displayName,
+            avatarIndex: avatarIndex,
+            isTotpEnabled: isTotpEnabled,
+            totpSecret: totpSecret,
+            role: role,
+          );
+
+          // Persist session
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('auth_uid', user.uid);
+          await prefs.setString('auth_email', user.email ?? '');
+          await prefs.setString('auth_display_name', displayName);
+          await prefs.setInt('auth_avatar', avatarIndex);
+          await prefs.setBool('auth_totp_enabled', isTotpEnabled);
+          if (totpSecret != null) {
+            await prefs.setString('auth_totp_secret', totpSecret);
+          }
+          await prefs.setString('auth_role', role);
+
+          _isInitialized = true;
+          notifyListeners();
+          
+          await fetchUserData();
+        } catch (e) {
+          debugPrint('[AUTH PROVIDER ERROR] Auth listener user load failed: $e');
+          // Fallback to minimal user profile if Firestore read fails
+          _currentUser = UserProfile(
+            uid: user.uid,
+            email: user.email ?? '',
+            displayName: user.displayName ?? user.email?.split('@')[0] ?? 'Parent',
+            role: user.email?.toLowerCase().contains('admin') == true ? 'admin' : 'user',
+          );
+          _isInitialized = true;
+          notifyListeners();
+        }
+      }
+    }, onError: (e) {
+      debugPrint('[AUTH PROVIDER ERROR] Auth listener failed: $e');
+      _isInitialized = true;
       notifyListeners();
-    }
+    });
   }
 
   // --- Unified REST API Email Dispatcher (Production Standard) ---
@@ -240,7 +298,9 @@ class AuthProvider extends ChangeNotifier {
             'isTotpEnabled': true,
             'totpSecret': secret,
           });
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[AUTH PROVIDER ERROR] Failed to enable TOTP in Firestore: $e');
+        }
 
         return true;
       }
@@ -265,7 +325,9 @@ class AuthProvider extends ChangeNotifier {
           'isTotpEnabled': false,
           'totpSecret': null,
         });
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[AUTH PROVIDER ERROR] Failed to disable TOTP in Firestore: $e');
+      }
     }
   }
 
@@ -275,8 +337,8 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     _pendingEmail = email;
-    // Generate a secure 6-digit registration OTP
-    _otpCode = (100000 + Random().nextInt(900000)).toString();
+    // Generate a secure 5-digit registration OTP
+    _otpCode = (10000 + Random().nextInt(90000)).toString();
 
     // Trigger SMTP verification email
     await _triggerZohoEmail(
@@ -430,8 +492,8 @@ class AuthProvider extends ChangeNotifier {
         data: {'time': DateTime.now().toLocal().toString().split('.')[0]},
       );
 
+      await fetchUserData();
       _isLoading = false;
-      notifyListeners();
       return null;
     } on FirebaseAuthException catch (e) {
       _isLoading = false;
@@ -492,8 +554,8 @@ class AuthProvider extends ChangeNotifier {
           _pendingEmail = null;
           _pendingPassword = null;
           _otpCode = null;
+          await fetchUserData();
           _isLoading = false;
-          notifyListeners();
           return true;
         } catch (e) {
           debugPrint('TOTP verification login error: $e');
@@ -512,7 +574,7 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     _pendingEmail = email;
-    _otpCode = (100000 + Random().nextInt(900000)).toString();
+    _otpCode = (10000 + Random().nextInt(90000)).toString();
 
     await _triggerZohoEmail(
       type: 'PASSWORD_RESET_OTP',
@@ -546,7 +608,9 @@ class AuthProvider extends ChangeNotifier {
         await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).update({
           'avatarIndex': index,
         });
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[AUTH PROVIDER ERROR] Failed to update avatar index in Firestore: $e');
+      }
     }
   }
 
@@ -562,7 +626,9 @@ class AuthProvider extends ChangeNotifier {
         await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).update({
           'displayName': name,
         });
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[AUTH PROVIDER ERROR] Failed to update display name in Firestore: $e');
+      }
     }
   }
 
@@ -570,52 +636,304 @@ class AuthProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    await Future.delayed(const Duration(milliseconds: 1200));
+    try {
+      User? user;
 
-    final email = 'google.parent@gmail.com';
-    final name = 'Google Parent';
-    final uid = 'usr_g_${DateTime.now().millisecondsSinceEpoch}';
+      if (kIsWeb) {
+        // Web: Use Firebase's native popup (no need for Web Client ID config)
+        final GoogleAuthProvider googleProvider = GoogleAuthProvider();
+        final UserCredential userCredential =
+            await FirebaseAuth.instance.signInWithPopup(googleProvider);
+        user = userCredential.user;
+      } else {
+        // Mobile: Use google_sign_in package
+        final GoogleSignIn googleSignIn = GoogleSignIn();
+        final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
 
-    _currentUser = UserProfile(
-      uid: uid,
-      email: email,
-      displayName: name,
-      role: 'user',
-    );
+        if (googleUser == null) {
+          _isLoading = false;
+          notifyListeners();
+          return false;
+        }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_uid', uid);
-    await prefs.setString('auth_email', email);
-    await prefs.setString('auth_display_name', name);
-    await prefs.setString('auth_role', 'user');
-    await prefs.setBool('auth_totp_enabled', false);
+        final GoogleSignInAuthentication googleAuth =
+            await googleUser.authentication;
+        final credential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken,
+          idToken: googleAuth.idToken,
+        );
+
+        final UserCredential userCredential =
+            await FirebaseAuth.instance.signInWithCredential(credential);
+        user = userCredential.user;
+      }
+
+      if (user == null) {
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+
+      final email = user.email ?? '';
+      final name = user.displayName ?? email.split('@')[0];
+      final role = email.toLowerCase().contains('admin') ? 'admin' : 'user';
+
+      // Check if user profile exists in Firestore, create if not
+      final doc = await FirebaseFirestore.instance
+          .collection('users').doc(user.uid).get();
+
+      if (!doc.exists) {
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'uid': user.uid,
+          'email': email,
+          'displayName': name,
+          'avatarIndex': 0,
+          'isTotpEnabled': false,
+          'role': role,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      final data = doc.data();
+      _currentUser = UserProfile(
+        uid: user.uid,
+        email: email,
+        displayName: data?['displayName'] ?? name,
+        avatarIndex: data?['avatarIndex'] ?? 0,
+        role: data?['role'] ?? role,
+      );
+
+      // Persist session locally
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_uid', user.uid);
+      await prefs.setString('auth_email', email);
+      await prefs.setString('auth_display_name', _currentUser!.displayName);
+      await prefs.setInt('auth_avatar', _currentUser!.avatarIndex);
+      await prefs.setString('auth_role', _currentUser!.role);
+      await prefs.setBool('auth_totp_enabled', false);
+
+      // Send welcome email for new users
+      if (!doc.exists) {
+        await _triggerZohoEmail(
+          type: 'WELCOME',
+          email: email,
+          data: {'name': name},
+        );
+      }
+
+      await fetchUserData();
+      _isLoading = false;
+      return true;
+    } catch (e) {
+      debugPrint('Google Sign-In Error: $e');
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> fetchUserData() async {
+    if (_currentUser == null) return;
+    final uid = _currentUser!.uid;
 
     try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({
-        'uid': uid,
-        'email': email,
-        'displayName': name,
-        'avatarIndex': 0,
-        'isTotpEnabled': false,
-        'role': 'user',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    } catch (_) {}
+      final addressesSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('addresses')
+          .get();
+      final addresses = addressesSnap.docs
+          .map((d) => UserAddress.fromMap(d.id, d.data()))
+          .toList();
 
-    await _triggerZohoEmail(
-      type: 'WELCOME',
-      email: email,
-      data: {'name': name},
+      final notificationsSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('notifications')
+          .orderBy('createdAt', descending: true)
+          .get();
+      final notifications = notificationsSnap.docs
+          .map((d) => UserNotification.fromMap(d.id, d.data()))
+          .toList();
+
+      _currentUser = _currentUser!.copyWith(
+        addresses: addresses,
+        notifications: notifications,
+      );
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error fetching user addresses/notifications: $e');
+    }
+  }
+
+  Future<void> addAddress({
+    required String title,
+    required String recipientName,
+    required String phone,
+    required String addressLine1,
+    String? addressLine2,
+    required String city,
+    required String postalCode,
+    required bool isDefault,
+  }) async {
+    if (_currentUser == null) return;
+    final uid = _currentUser!.uid;
+
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('addresses')
+        .doc();
+
+    final newAddress = UserAddress(
+      id: ref.id,
+      title: title,
+      recipientName: recipientName,
+      phone: phone,
+      addressLine1: addressLine1,
+      addressLine2: addressLine2,
+      city: city,
+      postalCode: postalCode,
+      isDefault: isDefault,
     );
 
-    _isLoading = false;
-    notifyListeners();
-    return true;
+    await ref.set(newAddress.toMap());
+
+    if (isDefault) {
+      await _clearOtherDefaults(uid, ref.id);
+    }
+
+    await fetchUserData();
+  }
+
+  Future<void> updateAddress({
+    required String addressId,
+    required String title,
+    required String recipientName,
+    required String phone,
+    required String addressLine1,
+    String? addressLine2,
+    required String city,
+    required String postalCode,
+    required bool isDefault,
+  }) async {
+    if (_currentUser == null) return;
+    final uid = _currentUser!.uid;
+
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('addresses')
+        .doc(addressId);
+
+    final updated = UserAddress(
+      id: addressId,
+      title: title,
+      recipientName: recipientName,
+      phone: phone,
+      addressLine1: addressLine1,
+      addressLine2: addressLine2,
+      city: city,
+      postalCode: postalCode,
+      isDefault: isDefault,
+    );
+
+    await ref.set(updated.toMap());
+
+    if (isDefault) {
+      await _clearOtherDefaults(uid, addressId);
+    }
+
+    await fetchUserData();
+  }
+
+  Future<void> deleteAddress(String addressId) async {
+    if (_currentUser == null) return;
+    final uid = _currentUser!.uid;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('addresses')
+        .doc(addressId)
+        .delete();
+
+    await fetchUserData();
+  }
+
+  Future<void> setDefaultAddress(String addressId) async {
+    if (_currentUser == null) return;
+    final uid = _currentUser!.uid;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('addresses')
+        .doc(addressId)
+        .update({'isDefault': true});
+
+    await _clearOtherDefaults(uid, addressId);
+    await fetchUserData();
+  }
+
+  Future<void> _clearOtherDefaults(String uid, String activeId) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('addresses')
+        .get();
+
+    for (var doc in snap.docs) {
+      if (doc.id != activeId && (doc.data()['isDefault'] ?? false) == true) {
+        await doc.reference.update({'isDefault': false});
+      }
+    }
+  }
+
+  Future<void> markNotificationAsRead(String notificationId) async {
+    if (_currentUser == null) return;
+    final uid = _currentUser!.uid;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('notifications')
+        .doc(notificationId)
+        .update({'read': true});
+
+    await fetchUserData();
+  }
+
+  Future<void> addNotification(String targetUserId, String title, String body, String type) async {
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(targetUserId)
+        .collection('notifications')
+        .doc();
+
+    await ref.set({
+      'id': ref.id,
+      'title': title,
+      'body': body,
+      'type': type,
+      'read': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    if (_currentUser != null && _currentUser!.uid == targetUserId) {
+      await fetchUserData();
+    }
   }
 
   Future<void> logout() async {
     _currentUser = null;
     notifyListeners();
+
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (e) {
+      debugPrint('[AUTH PROVIDER ERROR] Firebase Auth signOut failed: $e');
+    }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_uid');

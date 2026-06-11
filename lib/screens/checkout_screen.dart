@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/shop_provider.dart';
 import '../services/auth_provider.dart';
 import '../widgets/animated_loader.dart';
+import '../models/user.dart';
 
 class CheckoutScreen extends StatefulWidget {
   const CheckoutScreen({super.key});
@@ -20,6 +21,68 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   final _cardExpiryController = TextEditingController();
   final _cardCvvController = TextEditingController();
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final addresses = auth.currentUser?.addresses ?? [];
+      if (addresses.isNotEmpty) {
+        final defaultAddr = addresses.firstWhere(
+          (a) => a.isDefault,
+          orElse: () => addresses.first,
+        );
+        _addressController.text = _formatAddress(defaultAddr);
+      }
+    });
+  }
+
+  String _formatAddress(UserAddress addr) {
+    final secondLine = addr.addressLine2 != null && addr.addressLine2!.isNotEmpty ? ', ${addr.addressLine2}' : '';
+    return '${addr.recipientName}\n${addr.addressLine1}$secondLine\n${addr.city}, ${addr.postalCode}\nPhone: ${addr.phone}';
+  }
+
+  void _showSavedAddressesPicker(BuildContext context, AuthProvider auth) {
+    final addresses = auth.currentUser?.addresses ?? [];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Select Shipping Address'),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: addresses.length,
+              itemBuilder: (context, index) {
+                final addr = addresses[index];
+                return ListTile(
+                  title: Text(addr.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text('${addr.recipientName}, ${addr.addressLine1}, ${addr.city}'),
+                  trailing: addr.isDefault ? const Icon(Icons.check_circle_rounded, color: Colors.green) : null,
+                  onTap: () {
+                    setState(() {
+                      _addressController.text = _formatAddress(addr);
+                    });
+                    Navigator.of(context).pop();
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _handlePayment() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -27,11 +90,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final auth = Provider.of<AuthProvider>(context, listen: false);
 
     final userEmail = auth.currentUser?.email ?? 'guest.parent@gmail.com';
-    final success = await shop.processCheckout(userEmail, _addressController.text.trim());
+    final errorMsg = await shop.processCheckout(userEmail, _addressController.text.trim());
 
     if (!mounted) return;
 
-    if (success) {
+    if (errorMsg == null) {
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -66,6 +129,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ],
         ),
       );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Checkout failed: $errorMsg'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
@@ -73,6 +143,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final shop = Provider.of<ShopProvider>(context);
+    final auth = Provider.of<AuthProvider>(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -94,18 +165,30 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(20.0),
                 children: [
-                  const Text(
-                    'Shipping Details',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Shipping Details',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      if (auth.currentUser?.addresses.isNotEmpty ?? false)
+                        TextButton.icon(
+                          icon: const Icon(Icons.location_on_rounded, size: 16),
+                          label: const Text('Select Saved'),
+                          onPressed: () => _showSavedAddressesPicker(context, auth),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _addressController,
+                    maxLines: 3,
                     validator: (val) => val == null || val.trim().isEmpty ? 'Enter shipping address' : null,
                     decoration: const InputDecoration(
                       labelText: 'Delivery Address',
                       prefixIcon: Icon(Icons.home_outlined),
-                      hintText: '123 Sweet Baby Lane, Nursery City',
+                      hintText: 'Recipient Name\n123 Sweet Baby Lane, Nursery City\nPhone: ...',
                     ),
                   ),
                   const SizedBox(height: 24),

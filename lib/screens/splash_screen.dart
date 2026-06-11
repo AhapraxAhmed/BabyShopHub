@@ -44,6 +44,12 @@ class _SplashScreenState extends State<SplashScreen> {
     } else {
       // Evaluate session details for returning users
       final auth = Provider.of<AuthProvider>(context, listen: false);
+      
+      // Wait for Firebase Auth listener to initialize
+      while (!auth.isInitialized) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+
       final isAdmin = auth.currentUser?.role == 'admin';
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(

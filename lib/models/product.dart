@@ -10,6 +10,7 @@ class Product {
   int stock;
   bool isWishlisted;
   final List<Review> reviews;
+  final Map<String, int> ratingDistribution;
 
   Product({
     required this.id,
@@ -23,6 +24,7 @@ class Product {
     required this.stock,
     this.isWishlisted = false,
     required this.reviews,
+    this.ratingDistribution = const {'1': 0, '2': 0, '3': 0, '4': 0, '5': 0},
   });
 
   Product copyWith({
@@ -37,6 +39,7 @@ class Product {
     int? stock,
     bool? isWishlisted,
     List<Review>? reviews,
+    Map<String, int>? ratingDistribution,
   }) {
     return Product(
       id: id ?? this.id,
@@ -50,6 +53,7 @@ class Product {
       stock: stock ?? this.stock,
       isWishlisted: isWishlisted ?? this.isWishlisted,
       reviews: reviews ?? this.reviews,
+      ratingDistribution: ratingDistribution ?? this.ratingDistribution,
     );
   }
 

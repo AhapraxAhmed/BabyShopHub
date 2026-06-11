@@ -50,7 +50,9 @@ class ShopProvider extends ChangeNotifier {
         }
         notifyListeners();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[SHOP PROVIDER ERROR] _loadProductsFromFirestore failed: $e');
+    }
   }
 
   /// Called by admin panel after product add/edit/delete
@@ -138,7 +140,9 @@ class ShopProvider extends ChangeNotifier {
           for (var doc in query.docs) {
             await doc.reference.delete();
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[SHOP PROVIDER ERROR] Failed to remove from wishlist: $e');
+        }
 
       } else {
         _wishlist.add(id);
@@ -151,7 +155,9 @@ class ShopProvider extends ChangeNotifier {
             'userEmail': email,
             'createdAt': FieldValue.serverTimestamp(),
           });
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[SHOP PROVIDER ERROR] Failed to add to wishlist: $e');
+        }
       }
       notifyListeners();
     }
@@ -228,11 +234,14 @@ class ShopProvider extends ChangeNotifier {
   }
 
   // --- Secure Checkout (Write to Firestore) ---
-  Future<bool> processCheckout(String userEmail, String shippingAddress) async {
+  Future<String?> processCheckout(String userEmail, String shippingAddress) async {
     _isLoading = true;
     notifyListeners();
 
     await Future.delayed(const Duration(milliseconds: 1500));
+
+    final user = FirebaseAuth.instance.currentUser;
+    final userId = user?.uid ?? '';
 
     final itemsList = _cart.map((item) => {
       'id': item.product.id,
@@ -240,20 +249,34 @@ class ShopProvider extends ChangeNotifier {
       'quantity': item.quantity,
       'price': item.product.price,
       'total': item.totalPrice,
+      'imageUrl': item.product.imageUrl, // Immutable product snapshot
     }).toList();
 
     final orderTotal = cartTotal;
 
-    // 1. Write order details to Firestore
+    // 1. Write order details to Firestore with statusHistory and product snapshots
     try {
       await FirebaseFirestore.instance.collection('orders').add({
         'email': userEmail,
+        'userId': userId,
         'address': shippingAddress,
         'items': itemsList,
         'total': orderTotal,
+        'statusHistory': [
+          {
+            'status': 'Pending',
+            'timestamp': Timestamp.now(),
+            'note': 'Order placed by customer',
+          }
+        ],
         'createdAt': FieldValue.serverTimestamp(),
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[SHOP PROVIDER ERROR] Order creation failed: $e');
+      _isLoading = false;
+      notifyListeners();
+      return e.toString();
+    }
 
     // 2. Decrement stocks in local memory & Firestore
     for (var cartItem in _cart) {
@@ -267,7 +290,9 @@ class ShopProvider extends ChangeNotifier {
               .collection('products')
               .doc(cartItem.product.id)
               .update({'stock': newStock});
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[SHOP PROVIDER ERROR] Failed to update stock for ${cartItem.product.id}: $e');
+        }
       }
     }
 
@@ -282,7 +307,7 @@ class ShopProvider extends ChangeNotifier {
       'address': shippingAddress,
     });
 
-    return true;
+    return null;
   }
 
   // --- Admin Stock Updates (Listen & Trigger Wishlist Emails) ---
@@ -300,7 +325,9 @@ class ShopProvider extends ChangeNotifier {
             .collection('products')
             .doc(productId)
             .update({'stock': newStock});
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[SHOP PROVIDER ERROR] Failed to update stock in Firestore: $e');
+      }
 
       // Trigger restock alerts
       if (previousStock == 0 && newStock > 0) {
@@ -321,7 +348,8 @@ class ShopProvider extends ChangeNotifier {
               });
             }
           }
-        } catch (_) {
+        } catch (e) {
+          debugPrint('[SHOP PROVIDER ERROR] Wishlist query failed: $e');
           // Local memory fallback trigger
           if (_wishlist.contains(productId)) {
             debugPrint('Mocking Zoho Wishlist Alert: ${product.name} back in stock!');

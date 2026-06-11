@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import '../services/auth_provider.dart';
 import '../theme/theme_provider.dart';
 import '../models/user.dart';
 import 'auth/login_screen.dart';
 import 'admin_panel.dart';
+import 'saved_addresses_screen.dart';
+import 'order_history_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -95,6 +98,35 @@ class ProfileScreen extends StatelessWidget {
                       ],
                     ),
                   ),
+                  // Dynamic Notification Badge Bell
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.notifications_outlined, size: 28),
+                        onPressed: () => _showNotificationsBottomSheet(context, auth),
+                        tooltip: 'Notifications',
+                      ),
+                      if (user.notifications.where((n) => !n.read).isNotEmpty)
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: Colors.redAccent,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                            child: Text(
+                              '${user.notifications.where((n) => !n.read).length}',
+                              style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        )
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -116,6 +148,28 @@ class ProfileScreen extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (context) => const ProfileDetailsSubScreen()),
+              );
+            },
+          ),
+          _buildSettingsButton(
+            context,
+            icon: Icons.receipt_long_outlined,
+            title: 'My Orders',
+            subtitle: 'Track status and review your order history',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const OrderHistoryScreen()),
+              );
+            },
+          ),
+          _buildSettingsButton(
+            context,
+            icon: Icons.location_on_outlined,
+            title: 'Saved Addresses',
+            subtitle: 'Manage default shipping and delivery options',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const SavedAddressesScreen()),
               );
             },
           ),
@@ -207,6 +261,139 @@ class ProfileScreen extends StatelessWidget {
         trailing: const Icon(Icons.chevron_right_rounded),
         onTap: onTap,
       ),
+    );
+  }
+
+  void _showNotificationsBottomSheet(BuildContext context, AuthProvider auth) {
+    final theme = Theme.of(context);
+    final notifications = auth.currentUser?.notifications ?? [];
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          builder: (context, scrollController) {
+            return StatefulBuilder(
+              builder: (context, setModalState) {
+                final currentNotifications = auth.currentUser?.notifications ?? [];
+                
+                return Column(
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.all(8),
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Notifications',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          if (currentNotifications.any((n) => !n.read))
+                            TextButton(
+                              onPressed: () async {
+                                for (var n in currentNotifications) {
+                                  if (!n.read) {
+                                    await auth.markNotificationAsRead(n.id);
+                                  }
+                                }
+                                setModalState(() {});
+                              },
+                              child: const Text('Mark all as read'),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const Divider(),
+                    Expanded(
+                      child: currentNotifications.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.notifications_none_rounded, size: 64, color: theme.colorScheme.onSurface.withOpacity(0.2)),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'No notifications yet',
+                                    style: TextStyle(fontSize: 14, color: theme.colorScheme.onSurface.withOpacity(0.5)),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              itemCount: currentNotifications.length,
+                              itemBuilder: (context, index) {
+                                final n = currentNotifications[index];
+                                final iconData = n.type == 'order'
+                                    ? Icons.local_shipping_rounded
+                                    : n.type == 'support'
+                                        ? Icons.support_agent_rounded
+                                        : Icons.notifications_rounded;
+                                
+                                return Container(
+                                  color: n.read ? null : theme.colorScheme.primary.withOpacity(0.04),
+                                  child: ListTile(
+                                    leading: CircleAvatar(
+                                      backgroundColor: n.read
+                                          ? Colors.grey.shade200
+                                          : theme.colorScheme.primary.withOpacity(0.1),
+                                      child: Icon(
+                                        iconData,
+                                        color: n.read ? Colors.grey : theme.colorScheme.primary,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      n.title,
+                                      style: TextStyle(
+                                        fontWeight: n.read ? FontWeight.normal : FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(height: 4),
+                                        Text(n.body, style: const TextStyle(fontSize: 12)),
+                                      ],
+                                    ),
+                                    trailing: !n.read
+                                        ? IconButton(
+                                            icon: const Icon(Icons.check_circle_outline_rounded, color: Colors.green),
+                                            onPressed: () async {
+                                              await auth.markNotificationAsRead(n.id);
+                                              setModalState(() {});
+                                            },
+                                            tooltip: 'Mark as read',
+                                          )
+                                        : null,
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -772,7 +959,21 @@ class _ContactUsSubScreenState extends State<ContactUsSubScreen> {
     });
 
     try {
-      // Register Zoho Support SMTP ticket document
+      final user = FirebaseAuth.instance.currentUser;
+
+      // 1. Create a support ticket in support_tickets collection for the admin panel inbox
+      await FirebaseFirestore.instance.collection('support_tickets').add({
+        'userId': user?.uid ?? '',
+        'name': _nameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'subject': _subjectController.text.trim(),
+        'message': _messageController.text.trim(),
+        'status': 'Open',
+        'replies': [],
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      // 2. Register Zoho Support SMTP ticket document
       await FirebaseFirestore.instance.collection('mail_triggers').add({
         'to': 'hello@theali.tech',
         'type': 'SUPPORT_CONTACT',

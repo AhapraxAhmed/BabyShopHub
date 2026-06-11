@@ -10,7 +10,7 @@ import 'screens/splash_screen.dart';
 void main() async {
   // Ensure Flutter engine bindings are initialized prior to loading preferences
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -18,7 +18,7 @@ void main() async {
   } catch (e) {
     debugPrint('Firebase initialization warning: $e');
   }
-  
+
   runApp(
     MultiProvider(
       providers: [

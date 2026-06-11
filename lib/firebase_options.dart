@@ -23,10 +23,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return ios;
       case TargetPlatform.macOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for macos - '
@@ -50,20 +47,33 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyDCWxYtcRdpLFqVejPc6DSIyPbk2XLmmfc',
-    appId: '1:39368360828:web:4d02da50044fbcc9fa1af9',
-    messagingSenderId: '39368360828',
-    projectId: 'babyshophub-916e8',
-    authDomain: 'babyshophub-916e8.firebaseapp.com',
-    storageBucket: 'babyshophub-916e8.firebasestorage.app',
-    measurementId: 'G-9VK3FB2K06',
+    apiKey: 'AIzaSyAS_tSvgR9EyEVqtV6fDWU3K8YugHiFjX4',
+    appId: '1:940262216174:web:e1beb9d89bbfaee97dbeff',
+    messagingSenderId: '940262216174',
+    projectId: 'babyshop-1f281',
+    authDomain: 'babyshop-1f281.firebaseapp.com',
+    databaseURL: 'https://babyshop-1f281-default-rtdb.firebaseio.com',
+    storageBucket: 'babyshop-1f281.firebasestorage.app',
+    measurementId: 'G-1ZFLSQQN27',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAq_9v26BWgr3r7cBQFcBJRshvNCB-noMQ',
-    appId: '1:39368360828:android:c636751bd8ab5100fa1af9',
-    messagingSenderId: '39368360828',
-    projectId: 'babyshophub-916e8',
-    storageBucket: 'babyshophub-916e8.firebasestorage.app',
+    apiKey: 'AIzaSyC2xopOmYXEmEgLO_otXvcDUyZ8nGJWo7o',
+    appId: '1:940262216174:android:76e66df2220e759c7dbeff',
+    messagingSenderId: '940262216174',
+    projectId: 'babyshop-1f281',
+    databaseURL: 'https://babyshop-1f281-default-rtdb.firebaseio.com',
+    storageBucket: 'babyshop-1f281.firebasestorage.app',
   );
+
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyA6c4yh--GFe1FcwohSzPiHo9UVtuNhs6I',
+    appId: '1:940262216174:ios:ef2b9cac5b5748437dbeff',
+    messagingSenderId: '940262216174',
+    projectId: 'babyshop-1f281',
+    databaseURL: 'https://babyshop-1f281-default-rtdb.firebaseio.com',
+    storageBucket: 'babyshop-1f281.firebasestorage.app',
+    iosBundleId: 'com.example.babyshophub',
+  );
+
 }
